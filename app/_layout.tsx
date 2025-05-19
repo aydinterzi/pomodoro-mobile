@@ -3,7 +3,6 @@ import React from "react";
 import { MD3LightTheme, Provider as PaperProvider } from "react-native-paper";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
-// Custom theme extending the default Material theme
 const theme = {
   ...MD3LightTheme,
   colors: {

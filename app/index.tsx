@@ -11,6 +11,7 @@ import {
   Surface,
   Switch,
   Text,
+  TextInput,
   useTheme,
 } from "react-native-paper";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -19,7 +20,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 type TimerTypeKey = "POMODORO" | "SHORT_BREAK" | "LONG_BREAK";
 
 // Timer types with their respective durations (in seconds)
-const TIMER_TYPES: Record<TimerTypeKey, number> = {
+const INITIAL_TIMER_TYPES: Record<TimerTypeKey, number> = {
   POMODORO: 25 * 60,
   SHORT_BREAK: 5 * 60,
   LONG_BREAK: 15 * 60,
@@ -31,11 +32,20 @@ export default function PomodoroScreen() {
 
   // State variables
   const [timerType, setTimerType] = useState<TimerTypeKey>("POMODORO");
-  const [timeLeft, setTimeLeft] = useState(TIMER_TYPES.POMODORO);
+  const [timerDurations, setTimerDurations] = useState(INITIAL_TIMER_TYPES);
+  const [timeLeft, setTimeLeft] = useState(INITIAL_TIMER_TYPES.POMODORO);
   const [isActive, setIsActive] = useState(false);
   const [pomodoroCount, setPomodoroCount] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
+  // Temporary state for settings dialog - stores minutes as strings
+  const [tempTimerDurations, setTempTimerDurations] = useState<
+    Record<TimerTypeKey, string>
+  >({
+    POMODORO: (INITIAL_TIMER_TYPES.POMODORO / 60).toString(),
+    SHORT_BREAK: (INITIAL_TIMER_TYPES.SHORT_BREAK / 60).toString(),
+    LONG_BREAK: (INITIAL_TIMER_TYPES.LONG_BREAK / 60).toString(),
+  });
 
   // Animation value for breathing effect
   const breatheAnim = useRef(new Animated.Value(1)).current;
@@ -64,7 +74,7 @@ export default function PomodoroScreen() {
 
   // Timer logic
   useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
 
     if (isActive && timeLeft > 0) {
       interval = setInterval(() => {
@@ -81,15 +91,15 @@ export default function PomodoroScreen() {
         // After 4 pomodoros, take a long break
         if (newCount % 4 === 0) {
           setTimerType("LONG_BREAK");
-          setTimeLeft(TIMER_TYPES.LONG_BREAK);
+          setTimeLeft(timerDurations.LONG_BREAK);
         } else {
           setTimerType("SHORT_BREAK");
-          setTimeLeft(TIMER_TYPES.SHORT_BREAK);
+          setTimeLeft(timerDurations.SHORT_BREAK);
         }
       } else {
         // After a break, return to pomodoro
         setTimerType("POMODORO");
-        setTimeLeft(TIMER_TYPES.POMODORO);
+        setTimeLeft(timerDurations.POMODORO);
       }
 
       setIsActive(false);
@@ -98,7 +108,21 @@ export default function PomodoroScreen() {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isActive, timeLeft, timerType, pomodoroCount, isMuted]);
+  }, [isActive, timeLeft, timerType, pomodoroCount, isMuted, timerDurations]);
+
+  // Effect to initialize tempTimerDurations (as strings) when settings dialog opens
+  const prevSettingsVisible = useRef(settingsVisible);
+  useEffect(() => {
+    if (settingsVisible && !prevSettingsVisible.current) {
+      // Dialog just opened
+      setTempTimerDurations({
+        POMODORO: (timerDurations.POMODORO / 60).toString(),
+        SHORT_BREAK: (timerDurations.SHORT_BREAK / 60).toString(),
+        LONG_BREAK: (timerDurations.LONG_BREAK / 60).toString(),
+      });
+    }
+    prevSettingsVisible.current = settingsVisible;
+  }, [settingsVisible, timerDurations]);
 
   // Convert seconds to MM:SS format
   const formatTime = (seconds: number): string => {
@@ -111,7 +135,10 @@ export default function PomodoroScreen() {
 
   // Calculate progress ratio (for ProgressBar)
   const getProgress = (): number => {
-    const totalTime = TIMER_TYPES[timerType];
+    const totalTime = timerDurations[timerType];
+    if (totalTime === 0) {
+      return 0; // Prevent division by zero if totalTime is 0
+    }
     return (totalTime - timeLeft) / totalTime;
   };
 
@@ -123,14 +150,14 @@ export default function PomodoroScreen() {
   // Reset timer
   const resetTimer = (): void => {
     setIsActive(false);
-    setTimeLeft(TIMER_TYPES[timerType]);
+    setTimeLeft(timerDurations[timerType]);
   };
 
   // Switch timer types
   const switchTimerType = (type: TimerTypeKey): void => {
     setIsActive(false);
     setTimerType(type);
-    setTimeLeft(TIMER_TYPES[type]);
+    setTimeLeft(timerDurations[type]);
   };
 
   // Get the color based on timer type
@@ -145,6 +172,66 @@ export default function PomodoroScreen() {
       default:
         return theme.colors.primary;
     }
+  };
+
+  // Handle duration change
+  const handleDurationChange = (
+    type: TimerTypeKey,
+    durationInSeconds: number
+  ): void => {
+    setTimerDurations((prevDurations) => ({
+      ...prevDurations,
+      [type]: durationInSeconds,
+    }));
+
+    // If the currently selected timer type's duration is changed and the timer is not active,
+    // update timeLeft to the new duration.
+    if (timerType === type && !isActive) {
+      setTimeLeft(durationInSeconds);
+    }
+  };
+
+  // Handle temporary duration changes (string input) in settings
+  const handleTempDurationChange = (type: TimerTypeKey, text: string) => {
+    setTempTimerDurations((prev) => ({
+      ...prev,
+      [type]: text, // Store the raw text
+    }));
+  };
+
+  // Save settings and close dialog
+  const handleSaveSettings = () => {
+    const newDurationsInSeconds: Record<TimerTypeKey, number> = {
+      ...INITIAL_TIMER_TYPES,
+    }; // Start with defaults
+
+    for (const typeKey in tempTimerDurations) {
+      const type = typeKey as TimerTypeKey;
+      const minutesString = tempTimerDurations[type];
+      const parsedMinutes = parseInt(minutesString, 10);
+
+      if (!Number.isNaN(parsedMinutes) && parsedMinutes >= 0) {
+        newDurationsInSeconds[type] = parsedMinutes * 60;
+      } else {
+        // If parsing fails or is negative, it keeps the default from INITIAL_TIMER_TYPES
+        // which was already set when newDurationsInSeconds was initialized.
+        // Or, more explicitly to show intent:
+        newDurationsInSeconds[type] = INITIAL_TIMER_TYPES[type];
+      }
+    }
+
+    setTimerDurations(newDurationsInSeconds);
+
+    if (!isActive) {
+      setTimeLeft(newDurationsInSeconds[timerType]);
+    }
+    setSettingsVisible(false);
+  };
+
+  // Cancel settings changes and close dialog
+  const handleCancelSettings = () => {
+    setSettingsVisible(false); // Simply close, temp changes are discarded implicitly
+    // as tempTimerDurations will be reset on next open
   };
 
   return (
@@ -245,7 +332,7 @@ export default function PomodoroScreen() {
       <Portal>
         <Dialog
           visible={settingsVisible}
-          onDismiss={() => setSettingsVisible(false)}
+          onDismiss={handleCancelSettings} // Dismiss acts as Cancel
         >
           <Dialog.Title>Settings</Dialog.Title>
           <Dialog.Content>
@@ -256,9 +343,43 @@ export default function PomodoroScreen() {
                 onValueChange={() => setIsMuted(!isMuted)}
               />
             </View>
+            <View style={styles.settingRow}>
+              <Text>Pomodoro (minutes)</Text>
+              <TextInput
+                style={styles.input}
+                keyboardType="numeric"
+                value={tempTimerDurations.POMODORO}
+                onChangeText={(text) =>
+                  handleTempDurationChange("POMODORO", text)
+                }
+              />
+            </View>
+            <View style={styles.settingRow}>
+              <Text>Short Break (minutes)</Text>
+              <TextInput
+                style={styles.input}
+                keyboardType="numeric"
+                value={tempTimerDurations.SHORT_BREAK}
+                onChangeText={(text) =>
+                  handleTempDurationChange("SHORT_BREAK", text)
+                }
+              />
+            </View>
+            <View style={styles.settingRow}>
+              <Text>Long Break (minutes)</Text>
+              <TextInput
+                style={styles.input}
+                keyboardType="numeric"
+                value={tempTimerDurations.LONG_BREAK}
+                onChangeText={(text) =>
+                  handleTempDurationChange("LONG_BREAK", text)
+                }
+              />
+            </View>
           </Dialog.Content>
           <Dialog.Actions>
-            <Button onPress={() => setSettingsVisible(false)}>Close</Button>
+            <Button onPress={handleCancelSettings}>Cancel</Button>
+            <Button onPress={handleSaveSettings}>Save</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>
@@ -324,5 +445,11 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     marginVertical: 8,
+  },
+  input: {
+    height: 40,
+    width: 60,
+    textAlign: "center",
+    marginLeft: 10,
   },
 });
